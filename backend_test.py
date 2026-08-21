@@ -1,877 +1,623 @@
 #!/usr/bin/env python3
 """
-Comprehensive Backend API Test for Net Worth Tracker
-Tests all endpoints: Auth, Profile, Assets, Liabilities, Goals, Dashboard, CSV Export, Admin
+Phase 2 Backend API Tests for Net Worth Tracker
+Tests: Config, Google Sign-In (unconfigured), Forgot/Reset Password, Crypto, Plaid (unconfigured), Auth Guards
 """
 
 import requests
 import json
+import time
 import random
 import string
-from datetime import datetime
 
 # Base URL from .env
-BASE_URL = "https://014034f7-66d0-4356-b597-4070a5cceb94.preview.emergentagent.com/api"
+BASE_URL = "https://financial-pulse-165.preview.emergentagent.com/api"
 
 # Test results tracking
-test_results = {
-    "passed": [],
-    "failed": [],
-    "warnings": []
-}
+test_results = []
 
-def log_pass(test_name):
-    print(f"✅ PASS: {test_name}")
-    test_results["passed"].append(test_name)
+def log_test(name, passed, details=""):
+    """Log test result"""
+    status = "✅ PASS" if passed else "❌ FAIL"
+    result = f"{status}: {name}"
+    if details:
+        result += f" - {details}"
+    print(result)
+    test_results.append({"name": name, "passed": passed, "details": details})
 
-def log_fail(test_name, reason):
-    print(f"❌ FAIL: {test_name} - {reason}")
-    test_results["failed"].append(f"{test_name}: {reason}")
+def random_email():
+    """Generate random email"""
+    rand = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    return f"test_{rand}@test.com"
 
-def log_warning(test_name, reason):
-    print(f"⚠️  WARNING: {test_name} - {reason}")
-    test_results["warnings"].append(f"{test_name}: {reason}")
-
-def generate_unique_email():
-    """Generate unique email for testing"""
-    random_str = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
-    return f"user+{random_str}@test.com"
-
-# Global variables to store test data
-regular_user_email = generate_unique_email()
-regular_user_password = "TestPass123!"
-regular_user_token = None
-admin_token = None
-created_asset_id = None
-created_custom_asset_id = None
-created_liability_id = None
-created_goal_id = None
-
-print("=" * 80)
-print("NET WORTH TRACKER - BACKEND API TEST")
-print("=" * 80)
-print(f"Base URL: {BASE_URL}")
-print(f"Test User Email: {regular_user_email}")
-print("=" * 80)
-
-# ============================================================================
-# 1. AUTH TESTS
-# ============================================================================
-print("\n" + "=" * 80)
-print("1. AUTH TESTS")
-print("=" * 80)
-
-# Test 1.1: Signup with NEW regular user
-print("\n[Test 1.1] POST /auth/signup - New regular user")
-try:
-    response = requests.post(
-        f"{BASE_URL}/auth/signup",
-        json={
-            "email": regular_user_email,
-            "password": regular_user_password,
-            "name": "Test User",
-            "currency": "USD"
-        },
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:500]}")
-    
-    if response.status_code == 200:
-        data = response.json()
-        if "token" in data and "user" in data:
-            regular_user_token = data["token"]
-            user = data["user"]
-            if user.get("role") == "user":
-                log_pass("Auth - Signup regular user (role=user)")
-            else:
-                log_warning("Auth - Signup regular user", f"Expected role=user, got role={user.get('role')}")
-        else:
-            log_fail("Auth - Signup regular user", "Missing token or user in response")
-    else:
-        log_fail("Auth - Signup regular user", f"Expected 200, got {response.status_code}")
-except Exception as e:
-    log_fail("Auth - Signup regular user", f"Exception: {str(e)}")
-
-# Test 1.2: Signup with admin@networth.app (should be 409 or admin)
-print("\n[Test 1.2] POST /auth/signup - admin@networth.app")
-try:
-    response = requests.post(
-        f"{BASE_URL}/auth/signup",
-        json={
-            "email": "admin@networth.app",
-            "password": "test1234",
-            "name": "Admin User",
-            "currency": "USD"
-        },
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:500]}")
-    
-    if response.status_code == 409:
-        log_pass("Auth - Signup admin@networth.app (409 already exists)")
-    elif response.status_code == 200:
-        data = response.json()
-        if data.get("user", {}).get("role") == "admin":
-            log_pass("Auth - Signup admin@networth.app (became admin)")
-        else:
-            log_fail("Auth - Signup admin@networth.app", "Expected admin role")
-    else:
-        log_fail("Auth - Signup admin@networth.app", f"Unexpected status {response.status_code}")
-except Exception as e:
-    log_fail("Auth - Signup admin@networth.app", f"Exception: {str(e)}")
-
-# Test 1.3: Login with regular user
-print("\n[Test 1.3] POST /auth/login - Regular user")
-try:
-    response = requests.post(
-        f"{BASE_URL}/auth/login",
-        json={
-            "email": regular_user_email,
-            "password": regular_user_password
-        },
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:500]}")
-    
-    if response.status_code == 200:
-        data = response.json()
-        if "token" in data and "user" in data:
-            regular_user_token = data["token"]
-            log_pass("Auth - Login regular user")
-        else:
-            log_fail("Auth - Login regular user", "Missing token or user")
-    else:
-        log_fail("Auth - Login regular user", f"Expected 200, got {response.status_code}")
-except Exception as e:
-    log_fail("Auth - Login regular user", f"Exception: {str(e)}")
-
-# Test 1.4: Login with wrong password
-print("\n[Test 1.4] POST /auth/login - Wrong password")
-try:
-    response = requests.post(
-        f"{BASE_URL}/auth/login",
-        json={
-            "email": regular_user_email,
-            "password": "WrongPassword123"
-        },
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    
-    if response.status_code == 401:
-        log_pass("Auth - Login wrong password (401)")
-    else:
-        log_fail("Auth - Login wrong password", f"Expected 401, got {response.status_code}")
-except Exception as e:
-    log_fail("Auth - Login wrong password", f"Exception: {str(e)}")
-
-# Test 1.5: GET /auth/me with token
-print("\n[Test 1.5] GET /auth/me - With Bearer token")
-try:
-    response = requests.get(
-        f"{BASE_URL}/auth/me",
-        headers={"Authorization": f"Bearer {regular_user_token}"},
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:500]}")
-    
-    if response.status_code == 200:
-        data = response.json()
-        if "user" in data:
-            log_pass("Auth - GET /me with token")
-        else:
-            log_fail("Auth - GET /me with token", "Missing user in response")
-    else:
-        log_fail("Auth - GET /me with token", f"Expected 200, got {response.status_code}")
-except Exception as e:
-    log_fail("Auth - GET /me with token", f"Exception: {str(e)}")
-
-# Test 1.6: GET /auth/me without token
-print("\n[Test 1.6] GET /auth/me - Without token")
-try:
-    response = requests.get(
-        f"{BASE_URL}/auth/me",
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    
-    if response.status_code == 401:
-        log_pass("Auth - GET /me without token (401)")
-    else:
-        log_fail("Auth - GET /me without token", f"Expected 401, got {response.status_code}")
-except Exception as e:
-    log_fail("Auth - GET /me without token", f"Exception: {str(e)}")
-
-# ============================================================================
-# 2. PROFILE TESTS
-# ============================================================================
-print("\n" + "=" * 80)
-print("2. PROFILE TESTS")
-print("=" * 80)
-
-# Test 2.1: Update profile (currency and name)
-print("\n[Test 2.1] PUT /profile - Update currency and name")
-try:
-    response = requests.put(
-        f"{BASE_URL}/profile",
-        headers={"Authorization": f"Bearer {regular_user_token}"},
-        json={
-            "currency": "INR",
-            "name": "Updated Test User"
-        },
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:500]}")
-    
-    if response.status_code == 200:
-        data = response.json()
-        user = data.get("user", {})
-        if user.get("currency") == "INR" and user.get("name") == "Updated Test User":
-            log_pass("Profile - Update currency and name")
-        else:
-            log_fail("Profile - Update", f"Currency={user.get('currency')}, Name={user.get('name')}")
-    else:
-        log_fail("Profile - Update", f"Expected 200, got {response.status_code}")
-except Exception as e:
-    log_fail("Profile - Update", f"Exception: {str(e)}")
-
-# ============================================================================
-# 3. ASSETS CRUD TESTS
-# ============================================================================
-print("\n" + "=" * 80)
-print("3. ASSETS CRUD TESTS")
-print("=" * 80)
-
-# Test 3.1: Create asset with default category
-print("\n[Test 3.1] POST /assets - Create asset (Stocks)")
-try:
-    response = requests.post(
-        f"{BASE_URL}/assets",
-        headers={"Authorization": f"Bearer {regular_user_token}"},
-        json={
-            "name": "Apple Stock",
-            "category": "Stocks",
-            "value": 10000,
-            "notes": "AAPL shares"
-        },
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:500]}")
-    
-    if response.status_code == 200:
-        data = response.json()
-        if "id" in data:
-            created_asset_id = data["id"]
-            log_pass("Assets - Create asset (Stocks)")
-        else:
-            log_fail("Assets - Create asset", "Missing id in response")
-    else:
-        log_fail("Assets - Create asset", f"Expected 200, got {response.status_code}")
-except Exception as e:
-    log_fail("Assets - Create asset", f"Exception: {str(e)}")
-
-# Test 3.2: Create asset with CUSTOM category
-print("\n[Test 3.2] POST /assets - Create asset (Custom category)")
-try:
-    response = requests.post(
-        f"{BASE_URL}/assets",
-        headers={"Authorization": f"Bearer {regular_user_token}"},
-        json={
-            "name": "Startup Investment",
-            "category": "Angel Investments",
-            "value": 5000,
-            "notes": "Early stage startup"
-        },
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:500]}")
-    
-    if response.status_code == 200:
-        data = response.json()
-        if "id" in data and data.get("category") == "Angel Investments":
-            created_custom_asset_id = data["id"]
-            log_pass("Assets - Create asset (Custom category)")
-        else:
-            log_fail("Assets - Create asset (Custom)", "Missing id or wrong category")
-    else:
-        log_fail("Assets - Create asset (Custom)", f"Expected 200, got {response.status_code}")
-except Exception as e:
-    log_fail("Assets - Create asset (Custom)", f"Exception: {str(e)}")
-
-# Test 3.3: GET all assets
-print("\n[Test 3.3] GET /assets - List all assets")
-try:
-    response = requests.get(
-        f"{BASE_URL}/assets",
-        headers={"Authorization": f"Bearer {regular_user_token}"},
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:500]}")
-    
-    if response.status_code == 200:
-        data = response.json()
-        if isinstance(data, list) and len(data) >= 2:
-            log_pass("Assets - GET all assets")
-        else:
-            log_fail("Assets - GET all", f"Expected array with 2+ items, got {len(data) if isinstance(data, list) else 'not array'}")
-    else:
-        log_fail("Assets - GET all", f"Expected 200, got {response.status_code}")
-except Exception as e:
-    log_fail("Assets - GET all", f"Exception: {str(e)}")
-
-# Test 3.4: Update asset value
-print("\n[Test 3.4] PUT /assets/{id} - Update value")
-if created_asset_id:
+def test_config():
+    """Test 1: GET /api/config with valid token"""
+    print("\n=== TEST 1: CONFIG ENDPOINT ===")
     try:
-        response = requests.put(
-            f"{BASE_URL}/assets/{created_asset_id}",
-            headers={"Authorization": f"Bearer {regular_user_token}"},
-            json={"value": 12000},
-            timeout=10
-        )
-        print(f"Status: {response.status_code}")
-        print(f"Response: {response.text[:500]}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("value") == 12000:
-                log_pass("Assets - Update value")
-            else:
-                log_fail("Assets - Update value", f"Expected value=12000, got {data.get('value')}")
-        else:
-            log_fail("Assets - Update value", f"Expected 200, got {response.status_code}")
-    except Exception as e:
-        log_fail("Assets - Update value", f"Exception: {str(e)}")
-else:
-    log_fail("Assets - Update value", "No asset ID available")
-
-# Test 3.5: Delete custom asset
-print("\n[Test 3.5] DELETE /assets/{id} - Delete custom asset")
-if created_custom_asset_id:
-    try:
-        response = requests.delete(
-            f"{BASE_URL}/assets/{created_custom_asset_id}",
-            headers={"Authorization": f"Bearer {regular_user_token}"},
-            timeout=10
-        )
-        print(f"Status: {response.status_code}")
-        print(f"Response: {response.text[:500]}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("success") == True:
-                # Verify deletion
-                verify_response = requests.get(
-                    f"{BASE_URL}/assets",
-                    headers={"Authorization": f"Bearer {regular_user_token}"},
-                    timeout=10
-                )
-                assets = verify_response.json()
-                if not any(a.get("id") == created_custom_asset_id for a in assets):
-                    log_pass("Assets - Delete asset")
-                else:
-                    log_fail("Assets - Delete asset", "Asset still exists after deletion")
-            else:
-                log_fail("Assets - Delete asset", "success not true")
-        else:
-            log_fail("Assets - Delete asset", f"Expected 200, got {response.status_code}")
-    except Exception as e:
-        log_fail("Assets - Delete asset", f"Exception: {str(e)}")
-else:
-    log_fail("Assets - Delete asset", "No custom asset ID available")
-
-# ============================================================================
-# 4. LIABILITIES CRUD TESTS
-# ============================================================================
-print("\n" + "=" * 80)
-print("4. LIABILITIES CRUD TESTS")
-print("=" * 80)
-
-# Test 4.1: Create liability
-print("\n[Test 4.1] POST /liabilities - Create liability")
-try:
-    response = requests.post(
-        f"{BASE_URL}/liabilities",
-        headers={"Authorization": f"Bearer {regular_user_token}"},
-        json={
-            "name": "Home Mortgage",
-            "category": "Mortgage",
-            "value": 4000,
-            "notes": "Monthly payment"
-        },
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:500]}")
-    
-    if response.status_code == 200:
-        data = response.json()
-        if "id" in data:
-            created_liability_id = data["id"]
-            log_pass("Liabilities - Create liability")
-        else:
-            log_fail("Liabilities - Create", "Missing id in response")
-    else:
-        log_fail("Liabilities - Create", f"Expected 200, got {response.status_code}")
-except Exception as e:
-    log_fail("Liabilities - Create", f"Exception: {str(e)}")
-
-# Test 4.2: GET all liabilities
-print("\n[Test 4.2] GET /liabilities - List all")
-try:
-    response = requests.get(
-        f"{BASE_URL}/liabilities",
-        headers={"Authorization": f"Bearer {regular_user_token}"},
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:500]}")
-    
-    if response.status_code == 200:
-        data = response.json()
-        if isinstance(data, list) and len(data) >= 1:
-            log_pass("Liabilities - GET all")
-        else:
-            log_fail("Liabilities - GET all", f"Expected array with 1+ items")
-    else:
-        log_fail("Liabilities - GET all", f"Expected 200, got {response.status_code}")
-except Exception as e:
-    log_fail("Liabilities - GET all", f"Exception: {str(e)}")
-
-# Test 4.3: Update liability
-print("\n[Test 4.3] PUT /liabilities/{id} - Update value")
-if created_liability_id:
-    try:
-        response = requests.put(
-            f"{BASE_URL}/liabilities/{created_liability_id}",
-            headers={"Authorization": f"Bearer {regular_user_token}"},
-            json={"value": 4500},
-            timeout=10
-        )
-        print(f"Status: {response.status_code}")
-        print(f"Response: {response.text[:500]}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("value") == 4500:
-                log_pass("Liabilities - Update value")
-            else:
-                log_fail("Liabilities - Update", f"Expected value=4500, got {data.get('value')}")
-        else:
-            log_fail("Liabilities - Update", f"Expected 200, got {response.status_code}")
-    except Exception as e:
-        log_fail("Liabilities - Update", f"Exception: {str(e)}")
-else:
-    log_fail("Liabilities - Update", "No liability ID available")
-
-# Test 4.4: Delete liability
-print("\n[Test 4.4] DELETE /liabilities/{id}")
-if created_liability_id:
-    try:
-        response = requests.delete(
-            f"{BASE_URL}/liabilities/{created_liability_id}",
-            headers={"Authorization": f"Bearer {regular_user_token}"},
-            timeout=10
-        )
-        print(f"Status: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("success") == True:
-                log_pass("Liabilities - Delete")
-            else:
-                log_fail("Liabilities - Delete", "success not true")
-        else:
-            log_fail("Liabilities - Delete", f"Expected 200, got {response.status_code}")
-    except Exception as e:
-        log_fail("Liabilities - Delete", f"Exception: {str(e)}")
-else:
-    log_fail("Liabilities - Delete", "No liability ID available")
-
-# ============================================================================
-# 5. GOALS CRUD TESTS
-# ============================================================================
-print("\n" + "=" * 80)
-print("5. GOALS CRUD TESTS")
-print("=" * 80)
-
-# Test 5.1: Create goal
-print("\n[Test 5.1] POST /goals - Create goal")
-try:
-    response = requests.post(
-        f"{BASE_URL}/goals",
-        headers={"Authorization": f"Bearer {regular_user_token}"},
-        json={
-            "title": "Retirement Fund",
-            "targetAmount": 100000,
-            "targetDate": "2030-01-01"
-        },
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:500]}")
-    
-    if response.status_code == 200:
-        data = response.json()
-        if "id" in data:
-            created_goal_id = data["id"]
-            log_pass("Goals - Create goal")
-        else:
-            log_fail("Goals - Create", "Missing id in response")
-    else:
-        log_fail("Goals - Create", f"Expected 200, got {response.status_code}")
-except Exception as e:
-    log_fail("Goals - Create", f"Exception: {str(e)}")
-
-# Test 5.2: GET all goals
-print("\n[Test 5.2] GET /goals - List all")
-try:
-    response = requests.get(
-        f"{BASE_URL}/goals",
-        headers={"Authorization": f"Bearer {regular_user_token}"},
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:500]}")
-    
-    if response.status_code == 200:
-        data = response.json()
-        if isinstance(data, list) and len(data) >= 1:
-            log_pass("Goals - GET all")
-        else:
-            log_fail("Goals - GET all", "Expected array with 1+ items")
-    else:
-        log_fail("Goals - GET all", f"Expected 200, got {response.status_code}")
-except Exception as e:
-    log_fail("Goals - GET all", f"Exception: {str(e)}")
-
-# Test 5.3: Update goal
-print("\n[Test 5.3] PUT /goals/{id} - Update targetAmount")
-if created_goal_id:
-    try:
-        response = requests.put(
-            f"{BASE_URL}/goals/{created_goal_id}",
-            headers={"Authorization": f"Bearer {regular_user_token}"},
-            json={"targetAmount": 150000},
-            timeout=10
-        )
-        print(f"Status: {response.status_code}")
-        print(f"Response: {response.text[:500]}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("targetAmount") == 150000:
-                log_pass("Goals - Update targetAmount")
-            else:
-                log_fail("Goals - Update", f"Expected 150000, got {data.get('targetAmount')}")
-        else:
-            log_fail("Goals - Update", f"Expected 200, got {response.status_code}")
-    except Exception as e:
-        log_fail("Goals - Update", f"Exception: {str(e)}")
-else:
-    log_fail("Goals - Update", "No goal ID available")
-
-# Test 5.4: Delete goal
-print("\n[Test 5.4] DELETE /goals/{id}")
-if created_goal_id:
-    try:
-        response = requests.delete(
-            f"{BASE_URL}/goals/{created_goal_id}",
-            headers={"Authorization": f"Bearer {regular_user_token}"},
-            timeout=10
-        )
-        print(f"Status: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("success") == True:
-                log_pass("Goals - Delete")
-            else:
-                log_fail("Goals - Delete", "success not true")
-        else:
-            log_fail("Goals - Delete", f"Expected 200, got {response.status_code}")
-    except Exception as e:
-        log_fail("Goals - Delete", f"Exception: {str(e)}")
-else:
-    log_fail("Goals - Delete", "No goal ID available")
-
-# ============================================================================
-# 6. DASHBOARD TESTS
-# ============================================================================
-print("\n" + "=" * 80)
-print("6. DASHBOARD TESTS")
-print("=" * 80)
-
-# Test 6.1: GET dashboard
-print("\n[Test 6.1] GET /dashboard - Verify structure and calculations")
-try:
-    response = requests.get(
-        f"{BASE_URL}/dashboard",
-        headers={"Authorization": f"Bearer {regular_user_token}"},
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:1000]}")
-    
-    if response.status_code == 200:
-        data = response.json()
-        required_keys = ["summary", "allocation", "liabilityBreakdown", "history", "goals"]
-        missing_keys = [k for k in required_keys if k not in data]
-        
-        if missing_keys:
-            log_fail("Dashboard - Structure", f"Missing keys: {missing_keys}")
-        else:
-            summary = data.get("summary", {})
-            summary_keys = ["netWorth", "totalAssets", "totalLiabilities", "growth", "growthAmount"]
-            missing_summary = [k for k in summary_keys if k not in summary]
-            
-            if missing_summary:
-                log_fail("Dashboard - Summary keys", f"Missing: {missing_summary}")
-            else:
-                # Verify calculation: netWorth = totalAssets - totalLiabilities
-                net_worth = summary.get("netWorth", 0)
-                total_assets = summary.get("totalAssets", 0)
-                total_liabilities = summary.get("totalLiabilities", 0)
-                expected_net_worth = total_assets - total_liabilities
-                
-                print(f"  Net Worth: {net_worth}")
-                print(f"  Total Assets: {total_assets}")
-                print(f"  Total Liabilities: {total_liabilities}")
-                print(f"  Expected Net Worth: {expected_net_worth}")
-                
-                if net_worth == expected_net_worth:
-                    log_pass("Dashboard - Calculation correctness (netWorth = assets - liabilities)")
-                else:
-                    log_fail("Dashboard - Calculation", f"netWorth={net_worth} != {expected_net_worth}")
-    else:
-        log_fail("Dashboard - GET", f"Expected 200, got {response.status_code}")
-except Exception as e:
-    log_fail("Dashboard - GET", f"Exception: {str(e)}")
-
-# ============================================================================
-# 7. CSV EXPORT TESTS
-# ============================================================================
-print("\n" + "=" * 80)
-print("7. CSV EXPORT TESTS")
-print("=" * 80)
-
-# Test 7.1: GET CSV export
-print("\n[Test 7.1] GET /export - CSV export")
-try:
-    response = requests.get(
-        f"{BASE_URL}/export",
-        headers={"Authorization": f"Bearer {regular_user_token}"},
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Content-Type: {response.headers.get('Content-Type')}")
-    print(f"Response (first 300 chars): {response.text[:300]}")
-    
-    if response.status_code == 200:
-        content_type = response.headers.get('Content-Type', '')
-        if 'text/csv' in content_type:
-            # Check for header row
-            if 'Type,Name,Category,Value,Notes' in response.text or 'Type","Name","Category","Value","Notes' in response.text:
-                log_pass("CSV Export - Format and headers")
-            else:
-                log_fail("CSV Export - Headers", "Missing expected header row")
-        else:
-            log_fail("CSV Export - Content-Type", f"Expected text/csv, got {content_type}")
-    else:
-        log_fail("CSV Export", f"Expected 200, got {response.status_code}")
-except Exception as e:
-    log_fail("CSV Export", f"Exception: {str(e)}")
-
-# ============================================================================
-# 8. ADMIN TESTS
-# ============================================================================
-print("\n" + "=" * 80)
-print("8. ADMIN TESTS")
-print("=" * 80)
-
-# Test 8.1: Admin endpoints with regular user (should be 403)
-print("\n[Test 8.1] GET /admin/metrics - With regular user (expect 403)")
-try:
-    response = requests.get(
-        f"{BASE_URL}/admin/metrics",
-        headers={"Authorization": f"Bearer {regular_user_token}"},
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    
-    if response.status_code == 403:
-        log_pass("Admin - /admin/metrics with regular user (403)")
-    else:
-        log_fail("Admin - /admin/metrics", f"Expected 403, got {response.status_code}")
-except Exception as e:
-    log_fail("Admin - /admin/metrics", f"Exception: {str(e)}")
-
-print("\n[Test 8.2] GET /admin/users - With regular user (expect 403)")
-try:
-    response = requests.get(
-        f"{BASE_URL}/admin/users",
-        headers={"Authorization": f"Bearer {regular_user_token}"},
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    
-    if response.status_code == 403:
-        log_pass("Admin - /admin/users with regular user (403)")
-    else:
-        log_fail("Admin - /admin/users", f"Expected 403, got {response.status_code}")
-except Exception as e:
-    log_fail("Admin - /admin/users", f"Exception: {str(e)}")
-
-print("\n[Test 8.3] GET /admin/audit - With regular user (expect 403)")
-try:
-    response = requests.get(
-        f"{BASE_URL}/admin/audit",
-        headers={"Authorization": f"Bearer {regular_user_token}"},
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    
-    if response.status_code == 403:
-        log_pass("Admin - /admin/audit with regular user (403)")
-    else:
-        log_fail("Admin - /admin/audit", f"Expected 403, got {response.status_code}")
-except Exception as e:
-    log_fail("Admin - /admin/audit", f"Exception: {str(e)}")
-
-# Test 8.4: Login as admin and test admin endpoints
-print("\n[Test 8.4] POST /auth/login - Admin user")
-try:
-    response = requests.post(
-        f"{BASE_URL}/auth/login",
-        json={
+        # First login as admin to get a valid token
+        login_resp = requests.post(f"{BASE_URL}/auth/login", json={
             "email": "admin@networth.app",
             "password": "test1234"
-        },
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:500]}")
+        })
+        
+        if login_resp.status_code != 200:
+            log_test("Config - Admin Login", False, f"Admin login failed: {login_resp.status_code}")
+            return None
+        
+        token = login_resp.json().get("token")
+        
+        # Test config endpoint
+        resp = requests.get(f"{BASE_URL}/config", headers={
+            "Authorization": f"Bearer {token}"
+        })
+        
+        if resp.status_code != 200:
+            log_test("Config - GET /api/config", False, f"Status {resp.status_code}, expected 200")
+            return token
+        
+        data = resp.json()
+        
+        # Verify structure
+        if "googleEnabled" not in data or "plaidEnabled" not in data:
+            log_test("Config - Response Structure", False, f"Missing keys in response: {data}")
+            return token
+        
+        # Verify values (should be false since keys are unset)
+        if data["googleEnabled"] != False or data["plaidEnabled"] != False:
+            log_test("Config - Values", False, f"Expected both false, got: {data}")
+            return token
+        
+        log_test("Config - GET /api/config", True, f"Returns {data}")
+        return token
+        
+    except Exception as e:
+        log_test("Config - Exception", False, str(e))
+        return None
+
+def test_google_unconfigured():
+    """Test 2: POST /api/auth/google (unconfigured)"""
+    print("\n=== TEST 2: GOOGLE SIGN-IN (UNCONFIGURED) ===")
+    try:
+        resp = requests.post(f"{BASE_URL}/auth/google", json={
+            "credential": "anything"
+        })
+        
+        if resp.status_code != 503:
+            log_test("Google - Unconfigured Status", False, f"Status {resp.status_code}, expected 503")
+            return
+        
+        data = resp.json()
+        if "error" not in data or "not configured" not in data["error"].lower():
+            log_test("Google - Error Message", False, f"Unexpected error: {data}")
+            return
+        
+        log_test("Google - POST /api/auth/google", True, f"Returns 503 with error: {data['error']}")
+        
+    except Exception as e:
+        log_test("Google - Exception", False, str(e))
+
+def test_forgot_reset_password():
+    """Test 3: Forgot/Reset Password Flow"""
+    print("\n=== TEST 3: FORGOT/RESET PASSWORD FLOW ===")
     
-    if response.status_code == 200:
-        data = response.json()
-        if "token" in data and data.get("user", {}).get("role") == "admin":
-            admin_token = data["token"]
-            log_pass("Admin - Login as admin")
-        else:
-            log_fail("Admin - Login", "Missing token or not admin role")
-    else:
-        log_fail("Admin - Login", f"Expected 200, got {response.status_code}")
-except Exception as e:
-    log_fail("Admin - Login", f"Exception: {str(e)}")
-
-# Test 8.5: GET /admin/metrics with admin token
-print("\n[Test 8.5] GET /admin/metrics - With admin token")
-if admin_token:
+    # Step 1: Create fresh user
+    fresh_email = random_email()
+    fresh_password = "orig1234"
+    
     try:
-        response = requests.get(
-            f"{BASE_URL}/admin/metrics",
-            headers={"Authorization": f"Bearer {admin_token}"},
-            timeout=10
-        )
-        print(f"Status: {response.status_code}")
-        print(f"Response: {response.text[:500]}")
+        signup_resp = requests.post(f"{BASE_URL}/auth/signup", json={
+            "email": fresh_email,
+            "password": fresh_password,
+            "name": "Reset Test User"
+        })
         
-        if response.status_code == 200:
-            data = response.json()
-            required_keys = ["totalUsers", "totalAssets", "totalLiabilities", "totalGoals"]
-            missing = [k for k in required_keys if k not in data]
-            if not missing:
-                log_pass("Admin - /admin/metrics with admin token")
-            else:
-                log_fail("Admin - /admin/metrics", f"Missing keys: {missing}")
-        else:
-            log_fail("Admin - /admin/metrics", f"Expected 200, got {response.status_code}")
+        if signup_resp.status_code != 200:
+            log_test("Forgot/Reset - Signup Fresh User", False, f"Status {signup_resp.status_code}")
+            return
+        
+        log_test("Forgot/Reset - Signup Fresh User", True, f"Created {fresh_email}")
+        
     except Exception as e:
-        log_fail("Admin - /admin/metrics", f"Exception: {str(e)}")
-else:
-    log_fail("Admin - /admin/metrics", "No admin token available")
-
-# Test 8.6: GET /admin/users with admin token
-print("\n[Test 8.6] GET /admin/users - With admin token")
-if admin_token:
+        log_test("Forgot/Reset - Signup Exception", False, str(e))
+        return
+    
+    # Step 2: POST /api/auth/forgot with valid email
     try:
-        response = requests.get(
-            f"{BASE_URL}/admin/users",
-            headers={"Authorization": f"Bearer {admin_token}"},
-            timeout=10
-        )
-        print(f"Status: {response.status_code}")
-        print(f"Response: {response.text[:500]}")
+        forgot_resp = requests.post(f"{BASE_URL}/auth/forgot", json={
+            "email": fresh_email
+        })
         
-        if response.status_code == 200:
-            data = response.json()
-            if isinstance(data, list):
-                log_pass("Admin - /admin/users with admin token")
-            else:
-                log_fail("Admin - /admin/users", "Expected array response")
-        else:
-            log_fail("Admin - /admin/users", f"Expected 200, got {response.status_code}")
+        if forgot_resp.status_code != 200:
+            log_test("Forgot/Reset - Forgot Request", False, f"Status {forgot_resp.status_code}")
+            return
+        
+        forgot_data = forgot_resp.json()
+        
+        if not forgot_data.get("ok"):
+            log_test("Forgot/Reset - Forgot Response ok", False, f"Expected ok:true, got {forgot_data}")
+            return
+        
+        if "devToken" not in forgot_data:
+            log_test("Forgot/Reset - devToken Present", False, f"No devToken in response: {forgot_data}")
+            return
+        
+        dev_token = forgot_data["devToken"]
+        log_test("Forgot/Reset - POST /api/auth/forgot", True, f"Returns ok:true with devToken")
+        
     except Exception as e:
-        log_fail("Admin - /admin/users", f"Exception: {str(e)}")
-else:
-    log_fail("Admin - /admin/users", "No admin token available")
-
-# Test 8.7: GET /admin/audit with admin token
-print("\n[Test 8.7] GET /admin/audit - With admin token")
-if admin_token:
+        log_test("Forgot/Reset - Forgot Exception", False, str(e))
+        return
+    
+    # Step 3: POST /api/auth/forgot with nonexistent email (no account leak)
     try:
-        response = requests.get(
-            f"{BASE_URL}/admin/audit",
-            headers={"Authorization": f"Bearer {admin_token}"},
-            timeout=10
-        )
-        print(f"Status: {response.status_code}")
-        print(f"Response: {response.text[:500]}")
+        nonexistent_email = random_email()
+        forgot_nonexist = requests.post(f"{BASE_URL}/auth/forgot", json={
+            "email": nonexistent_email
+        })
         
-        if response.status_code == 200:
-            data = response.json()
-            if isinstance(data, list):
-                log_pass("Admin - /admin/audit with admin token")
-            else:
-                log_fail("Admin - /admin/audit", "Expected array response")
-        else:
-            log_fail("Admin - /admin/audit", f"Expected 200, got {response.status_code}")
+        if forgot_nonexist.status_code != 200:
+            log_test("Forgot/Reset - Nonexistent Email Status", False, f"Status {forgot_nonexist.status_code}")
+            return
+        
+        nonexist_data = forgot_nonexist.json()
+        
+        if not nonexist_data.get("ok"):
+            log_test("Forgot/Reset - No Account Leak", False, f"Should return ok:true for nonexistent, got {nonexist_data}")
+            return
+        
+        log_test("Forgot/Reset - No Account Leak", True, "Returns ok:true for nonexistent email")
+        
     except Exception as e:
-        log_fail("Admin - /admin/audit", f"Exception: {str(e)}")
-else:
-    log_fail("Admin - /admin/audit", "No admin token available")
+        log_test("Forgot/Reset - Nonexistent Exception", False, str(e))
+        return
+    
+    # Step 4: POST /api/auth/reset with devToken
+    new_password = "new5678"
+    try:
+        reset_resp = requests.post(f"{BASE_URL}/auth/reset", json={
+            "email": fresh_email,
+            "token": dev_token,
+            "password": new_password
+        })
+        
+        if reset_resp.status_code != 200:
+            log_test("Forgot/Reset - Reset Password", False, f"Status {reset_resp.status_code}, response: {reset_resp.text}")
+            return
+        
+        reset_data = reset_resp.json()
+        
+        if not reset_data.get("ok"):
+            log_test("Forgot/Reset - Reset Response ok", False, f"Expected ok:true, got {reset_data}")
+            return
+        
+        log_test("Forgot/Reset - POST /api/auth/reset", True, "Password reset successful")
+        
+    except Exception as e:
+        log_test("Forgot/Reset - Reset Exception", False, str(e))
+        return
+    
+    # Step 5: Verify old password fails
+    try:
+        old_login = requests.post(f"{BASE_URL}/auth/login", json={
+            "email": fresh_email,
+            "password": fresh_password
+        })
+        
+        if old_login.status_code == 200:
+            log_test("Forgot/Reset - Old Password Fails", False, "Old password still works!")
+            return
+        
+        if old_login.status_code != 401:
+            log_test("Forgot/Reset - Old Password Status", False, f"Expected 401, got {old_login.status_code}")
+            return
+        
+        log_test("Forgot/Reset - Old Password Fails", True, "Old password returns 401")
+        
+    except Exception as e:
+        log_test("Forgot/Reset - Old Password Exception", False, str(e))
+        return
+    
+    # Step 6: Verify new password works
+    try:
+        new_login = requests.post(f"{BASE_URL}/auth/login", json={
+            "email": fresh_email,
+            "password": new_password
+        })
+        
+        if new_login.status_code != 200:
+            log_test("Forgot/Reset - New Password Works", False, f"Status {new_login.status_code}")
+            return
+        
+        new_data = new_login.json()
+        
+        if "token" not in new_data or "user" not in new_data:
+            log_test("Forgot/Reset - New Password Response", False, f"Missing token/user: {new_data}")
+            return
+        
+        log_test("Forgot/Reset - New Password Works", True, "New password login successful")
+        
+    except Exception as e:
+        log_test("Forgot/Reset - New Password Exception", False, str(e))
+        return
+    
+    # Step 7: Test with wrong/garbage token
+    try:
+        wrong_reset = requests.post(f"{BASE_URL}/auth/reset", json={
+            "email": fresh_email,
+            "token": "garbage_token_12345",
+            "password": "another_password"
+        })
+        
+        if wrong_reset.status_code != 400:
+            log_test("Forgot/Reset - Wrong Token Status", False, f"Expected 400, got {wrong_reset.status_code}")
+            return
+        
+        log_test("Forgot/Reset - Wrong Token Returns 400", True, "Invalid token returns 400")
+        
+    except Exception as e:
+        log_test("Forgot/Reset - Wrong Token Exception", False, str(e))
 
-# ============================================================================
-# FINAL SUMMARY
-# ============================================================================
-print("\n" + "=" * 80)
-print("TEST SUMMARY")
-print("=" * 80)
-print(f"✅ PASSED: {len(test_results['passed'])}")
-print(f"❌ FAILED: {len(test_results['failed'])}")
-print(f"⚠️  WARNINGS: {len(test_results['warnings'])}")
+def test_crypto(token):
+    """Test 4: Crypto Endpoints"""
+    print("\n=== TEST 4: CRYPTO ENDPOINTS ===")
+    
+    if not token:
+        log_test("Crypto - Token Missing", False, "No valid token provided")
+        return
+    
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    # Step 1: GET /api/crypto/coins
+    try:
+        coins_resp = requests.get(f"{BASE_URL}/crypto/coins", headers=headers)
+        
+        if coins_resp.status_code != 200:
+            log_test("Crypto - GET /api/crypto/coins", False, f"Status {coins_resp.status_code}")
+            return
+        
+        coins = coins_resp.json()
+        
+        if not isinstance(coins, list) or len(coins) == 0:
+            log_test("Crypto - Coins Array", False, f"Expected non-empty array, got {type(coins)}")
+            return
+        
+        # Verify structure
+        bitcoin = next((c for c in coins if c.get("id") == "bitcoin"), None)
+        if not bitcoin or bitcoin.get("symbol") != "BTC":
+            log_test("Crypto - Coins Structure", False, f"Bitcoin not found or invalid: {bitcoin}")
+            return
+        
+        log_test("Crypto - GET /api/crypto/coins", True, f"Returns {len(coins)} coins including BTC")
+        
+    except Exception as e:
+        log_test("Crypto - Coins Exception", False, str(e))
+        return
+    
+    # Step 2: POST /api/crypto (bitcoin)
+    bitcoin_id = None
+    try:
+        create_btc = requests.post(f"{BASE_URL}/crypto", headers=headers, json={
+            "coinId": "bitcoin",
+            "quantity": 0.5,
+            "averageCostUsd": 40000
+        })
+        
+        if create_btc.status_code != 200:
+            log_test("Crypto - POST bitcoin", False, f"Status {create_btc.status_code}, response: {create_btc.text}")
+            return
+        
+        btc_data = create_btc.json()
+        
+        if "id" not in btc_data or btc_data.get("symbol") != "BTC":
+            log_test("Crypto - Bitcoin Response", False, f"Invalid response: {btc_data}")
+            return
+        
+        bitcoin_id = btc_data["id"]
+        log_test("Crypto - POST bitcoin", True, f"Created BTC holding with id {bitcoin_id}")
+        
+    except Exception as e:
+        log_test("Crypto - Bitcoin Exception", False, str(e))
+        return
+    
+    # Step 3: POST /api/crypto (ethereum)
+    ethereum_id = None
+    try:
+        create_eth = requests.post(f"{BASE_URL}/crypto", headers=headers, json={
+            "coinId": "ethereum",
+            "quantity": 2,
+            "averageCostUsd": 2000
+        })
+        
+        if create_eth.status_code != 200:
+            log_test("Crypto - POST ethereum", False, f"Status {create_eth.status_code}")
+            return
+        
+        eth_data = create_eth.json()
+        ethereum_id = eth_data.get("id")
+        
+        log_test("Crypto - POST ethereum", True, f"Created ETH holding")
+        
+    except Exception as e:
+        log_test("Crypto - Ethereum Exception", False, str(e))
+        return
+    
+    # Step 4: POST /api/crypto with invalid coin
+    try:
+        invalid_coin = requests.post(f"{BASE_URL}/crypto", headers=headers, json={
+            "coinId": "not-a-coin",
+            "quantity": 1
+        })
+        
+        if invalid_coin.status_code != 400:
+            log_test("Crypto - Invalid Coin Status", False, f"Expected 400, got {invalid_coin.status_code}")
+            return
+        
+        error_data = invalid_coin.json()
+        if "error" not in error_data or "unknown coin" not in error_data["error"].lower():
+            log_test("Crypto - Invalid Coin Error", False, f"Unexpected error: {error_data}")
+            return
+        
+        log_test("Crypto - Invalid Coin Returns 400", True, "Unknown coin returns 400")
+        
+    except Exception as e:
+        log_test("Crypto - Invalid Coin Exception", False, str(e))
+        return
+    
+    # Step 5: GET /api/crypto and verify math
+    try:
+        holdings_resp = requests.get(f"{BASE_URL}/crypto", headers=headers)
+        
+        if holdings_resp.status_code != 200:
+            log_test("Crypto - GET /api/crypto", False, f"Status {holdings_resp.status_code}")
+            return
+        
+        holdings_data = holdings_resp.json()
+        
+        # Verify structure
+        if "rows" not in holdings_data or "totalValue" not in holdings_data:
+            log_test("Crypto - Holdings Structure", False, f"Missing keys: {holdings_data.keys()}")
+            return
+        
+        rows = holdings_data["rows"]
+        total_value = holdings_data["totalValue"]
+        total_gain_loss = holdings_data["totalGainLoss"]
+        total_daily = holdings_data.get("totalDailyGainLoss", 0)
+        
+        log_test("Crypto - GET /api/crypto Structure", True, f"Returns {len(rows)} holdings")
+        
+        # Verify math for each row
+        math_errors = []
+        calculated_total_value = 0
+        
+        for row in rows:
+            coin_id = row.get("coinId")
+            quantity = row.get("quantity", 0)
+            avg_cost = row.get("averageCostUsd", 0)
+            current_price = row.get("currentPrice")
+            value = row.get("value")
+            gain_loss = row.get("gainLoss")
+            daily_gain_loss = row.get("dailyGainLoss")
+            change_pct = row.get("changePct")
+            
+            # Verify currentPrice is positive
+            if current_price is None or current_price <= 0:
+                math_errors.append(f"{coin_id}: currentPrice is {current_price}, expected positive number")
+                continue
+            
+            # Verify value ≈ quantity * currentPrice (allow 1% tolerance)
+            expected_value = quantity * current_price
+            if value is None or abs(value - expected_value) > expected_value * 0.01:
+                math_errors.append(f"{coin_id}: value={value}, expected≈{expected_value}")
+            
+            calculated_total_value += value if value is not None else 0
+            
+            # Verify gainLoss ≈ value - quantity * averageCostUsd
+            expected_gain_loss = value - (quantity * avg_cost)
+            if gain_loss is not None and abs(gain_loss - expected_gain_loss) > abs(expected_gain_loss) * 0.01 + 0.01:
+                math_errors.append(f"{coin_id}: gainLoss={gain_loss}, expected≈{expected_gain_loss}")
+            
+            # Verify dailyGainLoss ≈ value * changePct / 100 (if changePct present)
+            if change_pct is not None and daily_gain_loss is not None:
+                expected_daily = value * (change_pct / 100)
+                if abs(daily_gain_loss - expected_daily) > abs(expected_daily) * 0.01 + 0.01:
+                    math_errors.append(f"{coin_id}: dailyGainLoss={daily_gain_loss}, expected≈{expected_daily}")
+        
+        # Verify totalValue ≈ sum of row values
+        if abs(total_value - calculated_total_value) > calculated_total_value * 0.01 + 0.01:
+            math_errors.append(f"totalValue={total_value}, expected≈{calculated_total_value}")
+        
+        if math_errors:
+            log_test("Crypto - Math Verification", False, "; ".join(math_errors))
+        else:
+            log_test("Crypto - Math Verification", True, f"All calculations correct (totalValue≈{total_value:.2f})")
+        
+    except Exception as e:
+        log_test("Crypto - Holdings Exception", False, str(e))
+        return
+    
+    # Step 6: PUT /api/crypto/{id} (update quantity)
+    if bitcoin_id:
+        try:
+            update_resp = requests.put(f"{BASE_URL}/crypto/{bitcoin_id}", headers=headers, json={
+                "quantity": 1
+            })
+            
+            if update_resp.status_code != 200:
+                log_test("Crypto - PUT update", False, f"Status {update_resp.status_code}")
+            else:
+                updated_data = update_resp.json()
+                if updated_data.get("quantity") != 1:
+                    log_test("Crypto - PUT quantity", False, f"Expected quantity=1, got {updated_data.get('quantity')}")
+                else:
+                    log_test("Crypto - PUT /api/crypto/{id}", True, "Updated quantity to 1")
+            
+        except Exception as e:
+            log_test("Crypto - Update Exception", False, str(e))
+    
+    # Step 7: DELETE /api/crypto/{id}
+    if ethereum_id:
+        try:
+            delete_resp = requests.delete(f"{BASE_URL}/crypto/{ethereum_id}", headers=headers)
+            
+            if delete_resp.status_code != 200:
+                log_test("Crypto - DELETE status", False, f"Status {delete_resp.status_code}")
+            else:
+                delete_data = delete_resp.json()
+                if not delete_data.get("success"):
+                    log_test("Crypto - DELETE response", False, f"Expected success:true, got {delete_data}")
+                else:
+                    # Verify it's gone
+                    verify_resp = requests.get(f"{BASE_URL}/crypto", headers=headers)
+                    verify_data = verify_resp.json()
+                    eth_still_exists = any(r.get("id") == ethereum_id for r in verify_data.get("rows", []))
+                    
+                    if eth_still_exists:
+                        log_test("Crypto - DELETE verification", False, "ETH holding still exists after delete")
+                    else:
+                        log_test("Crypto - DELETE /api/crypto/{id}", True, "Deleted ETH holding")
+            
+        except Exception as e:
+            log_test("Crypto - Delete Exception", False, str(e))
 
-if test_results['failed']:
-    print("\nFailed Tests:")
-    for fail in test_results['failed']:
-        print(f"  - {fail}")
+def test_plaid_unconfigured(token):
+    """Test 5: Plaid Endpoints (unconfigured)"""
+    print("\n=== TEST 5: PLAID ENDPOINTS (UNCONFIGURED) ===")
+    
+    if not token:
+        log_test("Plaid - Token Missing", False, "No valid token provided")
+        return
+    
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    # Test 1: POST /api/plaid/link-token
+    try:
+        link_resp = requests.post(f"{BASE_URL}/plaid/link-token", headers=headers)
+        
+        if link_resp.status_code != 503:
+            log_test("Plaid - link-token Status", False, f"Expected 503, got {link_resp.status_code}")
+        else:
+            link_data = link_resp.json()
+            if "error" not in link_data or "not configured" not in link_data["error"].lower():
+                log_test("Plaid - link-token Error", False, f"Unexpected error: {link_data}")
+            else:
+                log_test("Plaid - POST /api/plaid/link-token", True, "Returns 503")
+        
+    except Exception as e:
+        log_test("Plaid - link-token Exception", False, str(e))
+    
+    # Test 2: POST /api/plaid/exchange
+    try:
+        exchange_resp = requests.post(f"{BASE_URL}/plaid/exchange", headers=headers, json={
+            "public_token": "x"
+        })
+        
+        if exchange_resp.status_code != 503:
+            log_test("Plaid - exchange Status", False, f"Expected 503, got {exchange_resp.status_code}")
+        else:
+            log_test("Plaid - POST /api/plaid/exchange", True, "Returns 503")
+        
+    except Exception as e:
+        log_test("Plaid - exchange Exception", False, str(e))
+    
+    # Test 3: GET /api/plaid/balances
+    try:
+        balances_resp = requests.get(f"{BASE_URL}/plaid/balances", headers=headers)
+        
+        if balances_resp.status_code != 503:
+            log_test("Plaid - balances Status", False, f"Expected 503, got {balances_resp.status_code}")
+        else:
+            log_test("Plaid - GET /api/plaid/balances", True, "Returns 503")
+        
+    except Exception as e:
+        log_test("Plaid - balances Exception", False, str(e))
+    
+    # Test 4: POST /api/plaid/sync
+    try:
+        sync_resp = requests.post(f"{BASE_URL}/plaid/sync", headers=headers)
+        
+        if sync_resp.status_code != 503:
+            log_test("Plaid - sync Status", False, f"Expected 503, got {sync_resp.status_code}")
+        else:
+            log_test("Plaid - POST /api/plaid/sync", True, "Returns 503")
+        
+    except Exception as e:
+        log_test("Plaid - sync Exception", False, str(e))
 
-if test_results['warnings']:
-    print("\nWarnings:")
-    for warn in test_results['warnings']:
-        print(f"  - {warn}")
+def test_auth_guard():
+    """Test 6: Auth Guard - endpoints without token"""
+    print("\n=== TEST 6: AUTH GUARD ===")
+    
+    # Test 1: GET /api/crypto without token
+    try:
+        crypto_resp = requests.get(f"{BASE_URL}/crypto")
+        
+        if crypto_resp.status_code != 401:
+            log_test("Auth Guard - GET /api/crypto", False, f"Expected 401, got {crypto_resp.status_code}")
+        else:
+            log_test("Auth Guard - GET /api/crypto", True, "Returns 401 without token")
+        
+    except Exception as e:
+        log_test("Auth Guard - crypto Exception", False, str(e))
+    
+    # Test 2: GET /api/config without token
+    try:
+        config_resp = requests.get(f"{BASE_URL}/config")
+        
+        if config_resp.status_code != 401:
+            log_test("Auth Guard - GET /api/config", False, f"Expected 401, got {config_resp.status_code}")
+        else:
+            log_test("Auth Guard - GET /api/config", True, "Returns 401 without token")
+        
+    except Exception as e:
+        log_test("Auth Guard - config Exception", False, str(e))
 
-print("\n" + "=" * 80)
-print("TEST COMPLETE")
-print("=" * 80)
+def main():
+    """Run all Phase 2 tests"""
+    print("=" * 80)
+    print("PHASE 2 BACKEND API TESTS - NET WORTH TRACKER")
+    print("=" * 80)
+    
+    # Test 1: Config
+    token = test_config()
+    
+    # Test 2: Google (unconfigured)
+    test_google_unconfigured()
+    
+    # Test 3: Forgot/Reset Password
+    test_forgot_reset_password()
+    
+    # Test 4: Crypto
+    test_crypto(token)
+    
+    # Test 5: Plaid (unconfigured)
+    test_plaid_unconfigured(token)
+    
+    # Test 6: Auth Guard
+    test_auth_guard()
+    
+    # Summary
+    print("\n" + "=" * 80)
+    print("TEST SUMMARY")
+    print("=" * 80)
+    
+    passed = sum(1 for t in test_results if t["passed"])
+    failed = sum(1 for t in test_results if not t["passed"])
+    total = len(test_results)
+    
+    print(f"\nTotal Tests: {total}")
+    print(f"Passed: {passed}")
+    print(f"Failed: {failed}")
+    
+    if failed > 0:
+        print("\n❌ FAILED TESTS:")
+        for t in test_results:
+            if not t["passed"]:
+                print(f"  - {t['name']}: {t['details']}")
+    
+    print("\n" + "=" * 80)
+    
+    return failed == 0
 
-# Exit with appropriate code
-exit(0 if len(test_results['failed']) == 0 else 1)
+if __name__ == "__main__":
+    success = main()
+    exit(0 if success else 1)

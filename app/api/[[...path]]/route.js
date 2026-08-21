@@ -3,9 +3,69 @@ import { v4 as uuidv4 } from 'uuid'
 import { NextResponse } from 'next/server'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
+import { OAuth2Client } from 'google-auth-library'
+import { Configuration, PlaidApi, PlaidEnvironments, CountryCode, Products } from 'plaid'
+
+export const runtime = 'nodejs'
 
 let client
 let db
+
+// ---- Google ----
+const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID
+const googleClient = new OAuth2Client()
+
+// ---- Plaid ----
+function plaidConfigured() {
+  return Boolean(process.env.PLAID_CLIENT_ID && process.env.PLAID_SECRET && process.env.PLAID_ENV)
+}
+function getPlaidClient() {
+  if (!plaidConfigured()) return null
+  const cfg = new Configuration({
+    basePath: PlaidEnvironments[process.env.PLAID_ENV] || PlaidEnvironments.sandbox,
+    baseOptions: { headers: { 'PLAID-CLIENT-ID': process.env.PLAID_CLIENT_ID, 'PLAID-SECRET': process.env.PLAID_SECRET } },
+  })
+  return new PlaidApi(cfg)
+}
+
+// ---- CoinGecko (live crypto) ----
+const COINS = {
+  bitcoin: { symbol: 'BTC', name: 'Bitcoin' },
+  ethereum: { symbol: 'ETH', name: 'Ethereum' },
+  solana: { symbol: 'SOL', name: 'Solana' },
+  cardano: { symbol: 'ADA', name: 'Cardano' },
+  ripple: { symbol: 'XRP', name: 'XRP' },
+  dogecoin: { symbol: 'DOGE', name: 'Dogecoin' },
+  polkadot: { symbol: 'DOT', name: 'Polkadot' },
+  litecoin: { symbol: 'LTC', name: 'Litecoin' },
+  chainlink: { symbol: 'LINK', name: 'Chainlink' },
+  'matic-network': { symbol: 'MATIC', name: 'Polygon' },
+  'avalanche-2': { symbol: 'AVAX', name: 'Avalanche' },
+  tron: { symbol: 'TRX', name: 'TRON' },
+  'binancecoin': { symbol: 'BNB', name: 'BNB' },
+  'usd-coin': { symbol: 'USDC', name: 'USD Coin' },
+  tether: { symbol: 'USDT', name: 'Tether' },
+}
+let priceCache = { ts: 0, data: {} }
+async function getCryptoPrices(ids) {
+  const unique = [...new Set(ids)].filter(Boolean).sort()
+  if (!unique.length) return {}
+  const now = Date.now()
+  const missing = unique.filter(id => !priceCache.data[id])
+  if (now - priceCache.ts < 60000 && missing.length === 0) return priceCache.data
+  try {
+    const params = new URLSearchParams({ ids: unique.join(','), vs_currencies: 'usd', include_24hr_change: 'true', include_last_updated_at: 'true' })
+    const headers = {}
+    if (process.env.COINGECKO_API_KEY) headers['x-cg-demo-api-key'] = process.env.COINGECKO_API_KEY
+    const res = await fetch(`https://api.coingecko.com/api/v3/simple/price?${params}`, { headers })
+    if (!res.ok) throw new Error('price fetch failed')
+    const data = await res.json()
+    priceCache = { ts: now, data: { ...priceCache.data, ...data } }
+    return priceCache.data
+  } catch (e) {
+    return priceCache.data
+  }
+}
 
 async function connectToMongo() {
   if (!client) {
@@ -126,6 +186,75 @@ async function handleRoute(request, { params }) {
       }
       await audit(db, user.id, 'login', 'user', {})
       return json({ token: signToken(user), user: publicUser(user) })
+    }
+
+    // ---------- GOOGLE SIGN-IN ----------
+    if (route === '/auth/google' && method === 'POST') {
+      if (!GOOGLE_CLIENT_ID) return json({ error: 'Google sign-in is not configured' }, 503)
+      const body = await request.json()
+      if (!body.credential) return json({ error: 'Missing credential' }, 400)
+      let payload
+      try {
+        const ticket = await googleClient.verifyIdToken({ idToken: body.credential, audience: GOOGLE_CLIENT_ID })
+        payload = ticket.getPayload()
+      } catch {
+        return json({ error: 'Google authentication failed' }, 401)
+      }
+      if (!payload?.sub || !payload.email || payload.email_verified !== true) {
+        return json({ error: 'Google account has no verified email' }, 401)
+      }
+      const email = payload.email.toLowerCase()
+      let user = await db.collection('users').findOne({ googleSub: payload.sub })
+      if (!user) user = await db.collection('users').findOne({ email })
+      if (user) {
+        await db.collection('users').updateOne({ id: user.id }, { $set: { googleSub: payload.sub, emailVerified: true, name: user.name || payload.name, image: payload.picture || user.image || null } })
+        user = await db.collection('users').findOne({ id: user.id })
+      } else {
+        const count = await db.collection('users').countDocuments()
+        const role = (count === 0 || email === (process.env.ADMIN_EMAIL || '').toLowerCase()) ? 'admin' : 'user'
+        user = {
+          id: uuidv4(), email, name: payload.name || email.split('@')[0], password: null,
+          googleSub: payload.sub, image: payload.picture || null, currency: 'USD', role, emailVerified: true, createdAt: new Date(),
+        }
+        await db.collection('users').insertOne(user)
+      }
+      await audit(db, user.id, 'login_google', 'user', { email })
+      return json({ token: signToken(user), user: publicUser(user) })
+    }
+
+    // ---------- FORGOT PASSWORD ----------
+    if (route === '/auth/forgot' && method === 'POST') {
+      const body = await request.json()
+      const email = (body.email || '').toLowerCase().trim()
+      const user = await db.collection('users').findOne({ email })
+      // Always respond ok to avoid account enumeration
+      if (!user) return json({ ok: true })
+      const rawToken = uuidv4() + uuidv4().replace(/-/g, '')
+      const tokenHash = await bcrypt.hash(rawToken, 10)
+      await db.collection('users').updateOne({ id: user.id }, { $set: { resetTokenHash: tokenHash, resetTokenExp: Date.now() + 3600000 } })
+      await audit(db, user.id, 'forgot_password', 'user', { email })
+      const emailConfigured = false // no email provider wired yet
+      // For MVP without an email provider, return the token so the reset flow is usable.
+      return json({ ok: true, emailSent: emailConfigured, devToken: emailConfigured ? undefined : rawToken })
+    }
+
+    // ---------- RESET PASSWORD ----------
+    if (route === '/auth/reset' && method === 'POST') {
+      const body = await request.json()
+      const email = (body.email || '').toLowerCase().trim()
+      if (!body.token || !body.password || !email) return json({ error: 'Invalid request' }, 400)
+      const user = await db.collection('users').findOne({ email })
+      if (!user || !user.resetTokenHash || !user.resetTokenExp || user.resetTokenExp < Date.now()) {
+        return json({ error: 'Reset link is invalid or expired' }, 400)
+      }
+      const okToken = await bcrypt.compare(body.token, user.resetTokenHash)
+      if (!okToken) return json({ error: 'Reset link is invalid or expired' }, 400)
+      await db.collection('users').updateOne({ id: user.id }, {
+        $set: { password: await bcrypt.hash(body.password, 10) },
+        $unset: { resetTokenHash: '', resetTokenExp: '' },
+      })
+      await audit(db, user.id, 'reset_password', 'user', { email })
+      return json({ ok: true })
     }
 
     // ---------- everything below requires auth ----------
@@ -314,6 +443,139 @@ async function handleRoute(request, { params }) {
       res.headers.set('Content-Type', 'text/csv')
       res.headers.set('Content-Disposition', 'attachment; filename="networth-export.csv"')
       return handleCORS(res)
+    }
+
+    // ---------- CONFIG (what integrations are live) ----------
+    if (route === '/config' && method === 'GET') {
+      return json({ googleEnabled: Boolean(GOOGLE_CLIENT_ID), plaidEnabled: plaidConfigured() })
+    }
+
+    // ---------- PLAID ----------
+    if (route === '/plaid/link-token' && method === 'POST') {
+      const plaid = getPlaidClient()
+      if (!plaid) return json({ error: 'Plaid is not configured' }, 503)
+      try {
+        const resp = await plaid.linkTokenCreate({
+          user: { client_user_id: userId },
+          client_name: 'Aureal',
+          language: 'en',
+          country_codes: [CountryCode.Us],
+          products: [Products.Auth],
+        })
+        return json({ link_token: resp.data.link_token })
+      } catch (e) {
+        console.error('plaid link-token', e?.response?.data?.error_code)
+        return json({ error: 'Plaid request failed' }, 502)
+      }
+    }
+    if (route === '/plaid/exchange' && method === 'POST') {
+      const plaid = getPlaidClient()
+      if (!plaid) return json({ error: 'Plaid is not configured' }, 503)
+      const body = await request.json()
+      if (!body.public_token) return json({ error: 'public_token required' }, 400)
+      try {
+        const ex = await plaid.itemPublicTokenExchange({ public_token: body.public_token })
+        const { access_token, item_id } = ex.data
+        await db.collection('plaid_items').updateOne(
+          { userId, itemId: item_id },
+          { $set: { accessToken: access_token, updatedAt: new Date() }, $setOnInsert: { userId, itemId: item_id, createdAt: new Date() } },
+          { upsert: true }
+        )
+        await audit(db, userId, 'connect', 'bank', { item_id })
+        return json({ item_id })
+      } catch (e) {
+        console.error('plaid exchange', e?.response?.data?.error_code)
+        return json({ error: 'Plaid request failed' }, 502)
+      }
+    }
+    if (route === '/plaid/balances' && method === 'GET') {
+      const plaid = getPlaidClient()
+      if (!plaid) return json({ error: 'Plaid is not configured' }, 503)
+      try {
+        const items = await db.collection('plaid_items').find({ userId }).toArray()
+        const results = []
+        for (const item of items) {
+          const r = await plaid.accountsBalanceGet({ access_token: item.accessToken })
+          results.push({ item_id: item.itemId, accounts: r.data.accounts })
+        }
+        return json({ items: results })
+      } catch (e) {
+        console.error('plaid balances', e?.response?.data?.error_code)
+        return json({ error: 'Could not retrieve balances' }, 502)
+      }
+    }
+    if (route === '/plaid/sync' && method === 'POST') {
+      const plaid = getPlaidClient()
+      if (!plaid) return json({ error: 'Plaid is not configured' }, 503)
+      try {
+        const items = await db.collection('plaid_items').find({ userId }).toArray()
+        let imported = 0
+        for (const item of items) {
+          const r = await plaid.accountsBalanceGet({ access_token: item.accessToken })
+          for (const acc of r.data.accounts) {
+            const value = acc.balances?.current ?? acc.balances?.available ?? 0
+            await db.collection('assets').updateOne(
+              { userId, plaidAccountId: acc.account_id },
+              { $set: { name: acc.name || acc.official_name || 'Bank Account', category: 'Bank Accounts', value: Number(value) || 0, notes: `Synced via Plaid (${acc.mask || ''})`, source: 'plaid', updatedAt: new Date() },
+                $setOnInsert: { id: uuidv4(), userId, plaidAccountId: acc.account_id, createdAt: new Date() } },
+              { upsert: true }
+            )
+            imported++
+          }
+        }
+        await updateSnapshot(db, userId)
+        await audit(db, userId, 'sync', 'bank', { imported })
+        return json({ imported })
+      } catch (e) {
+        console.error('plaid sync', e?.response?.data?.error_code)
+        return json({ error: 'Sync failed' }, 502)
+      }
+    }
+
+    // ---------- CRYPTO (live prices) ----------
+    if (route === '/crypto/coins' && method === 'GET') {
+      return json(Object.entries(COINS).map(([id, v]) => ({ id, ...v })))
+    }
+    if (route === '/crypto' && method === 'GET') {
+      const holdings = await db.collection('crypto_holdings').find({ userId }).sort({ createdAt: -1 }).toArray()
+      const prices = await getCryptoPrices(holdings.map(h => h.coinId))
+      let totalValue = 0, totalGainLoss = 0, totalDaily = 0
+      const rows = holdings.map(({ _id, ...h }) => {
+        const m = prices[h.coinId] || {}
+        const currentPrice = m.usd ?? null
+        const value = currentPrice == null ? null : h.quantity * currentPrice
+        const costBasis = h.quantity * (h.averageCostUsd || 0)
+        const gainLoss = value == null ? null : value - costBasis
+        const changePct = m.usd_24h_change ?? null
+        const daily = value == null || changePct == null ? null : value * (changePct / 100)
+        if (value != null) totalValue += value
+        if (gainLoss != null) totalGainLoss += gainLoss
+        if (daily != null) totalDaily += daily
+        return { ...h, currentPrice, value, gainLoss, dailyGainLoss: daily, changePct }
+      })
+      return json({ rows, totalValue, totalGainLoss, totalDailyGainLoss: totalDaily })
+    }
+    if (route === '/crypto' && method === 'POST') {
+      const body = await request.json()
+      const meta = COINS[body.coinId]
+      if (!meta) return json({ error: 'Unknown coin' }, 400)
+      const item = { id: uuidv4(), userId, coinId: body.coinId, symbol: meta.symbol, name: meta.name, quantity: Number(body.quantity) || 0, averageCostUsd: Number(body.averageCostUsd) || 0, createdAt: new Date() }
+      await db.collection('crypto_holdings').insertOne(item)
+      const { _id, ...r } = item
+      return json(r)
+    }
+    if (route.startsWith('/crypto/') && method === 'PUT') {
+      const body = await request.json()
+      const update = {}
+      if (body.quantity !== undefined) update.quantity = Number(body.quantity)
+      if (body.averageCostUsd !== undefined) update.averageCostUsd = Number(body.averageCostUsd)
+      await db.collection('crypto_holdings').updateOne({ id, userId }, { $set: update })
+      const doc = await db.collection('crypto_holdings').findOne({ id, userId })
+      return json(doc ? (({ _id, ...r }) => r)(doc) : {})
+    }
+    if (route.startsWith('/crypto/') && method === 'DELETE') {
+      await db.collection('crypto_holdings').deleteOne({ id, userId })
+      return json({ success: true })
     }
 
     // ---------- ADMIN ----------

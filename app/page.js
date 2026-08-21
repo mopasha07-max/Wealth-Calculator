@@ -11,7 +11,9 @@ import {
   LayoutDashboard, Wallet, TrendingDown, Target, Plug, User, Shield,
   Sun, Moon, Plus, Pencil, Trash2, LogOut, Download, ArrowUpRight, ArrowDownRight,
   DollarSign, Landmark, Menu, Sparkles, Coins, Building2, CircleDollarSign,
+  RefreshCw, Link2, KeyRound, ArrowLeft, Bitcoin, Mail,
 } from 'lucide-react'
+import { usePlaidLink } from 'react-plaid-link'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -63,79 +65,157 @@ function fmt(n, currency = 'USD') {
   } catch { return `${(n || 0).toLocaleString()}` }
 }
 
+// ================= GOOGLE BUTTON =================
+function GoogleButton({ onAuth }) {
+  const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID
+  const [containerRef, setContainerRef] = useState(null)
+
+  useEffect(() => {
+    if (!clientId || !containerRef) return
+    const render = () => {
+      if (!window.google) return
+      window.google.accounts.id.initialize({
+        client_id: clientId,
+        callback: async ({ credential }) => {
+          try {
+            const data = await api('/auth/google', { method: 'POST', body: JSON.stringify({ credential }) })
+            localStorage.setItem('nwt_token', data.token)
+            onAuth(data.user)
+            toast.success('Signed in with Google')
+          } catch (e) { toast.error(e.message) }
+        },
+      })
+      window.google.accounts.id.renderButton(containerRef, { theme: 'outline', size: 'large', text: 'continue_with', width: 320 })
+    }
+    if (window.google) { render(); return }
+    const s = document.createElement('script')
+    s.src = 'https://accounts.google.com/gsi/client'
+    s.async = true
+    s.onload = render
+    document.head.appendChild(s)
+  }, [clientId, containerRef, onAuth])
+
+  if (!clientId) {
+    return <Button type="button" variant="outline" className="w-full" disabled title="Set NEXT_PUBLIC_GOOGLE_CLIENT_ID to enable">Continue with Google</Button>
+  }
+  return <div className="flex justify-center" ref={setContainerRef} />
+}
+
 // ================= AUTH SCREEN =================
 function AuthScreen({ onAuth }) {
-  const [mode, setMode] = useState('login')
-  const [form, setForm] = useState({ name: '', email: '', password: '', currency: 'USD' })
+  const [mode, setMode] = useState('login') // login | signup | forgot | reset
+  const [form, setForm] = useState({ name: '', email: '', password: '', currency: 'USD', token: '' })
   const [loading, setLoading] = useState(false)
 
-  const submit = async (e) => {
+  const submitAuth = async (e) => {
     e.preventDefault()
     setLoading(true)
     try {
-      const data = await api(`/auth/${mode === 'login' ? 'login' : 'signup'}`, {
-        method: 'POST', body: JSON.stringify(form),
-      })
+      const data = await api(`/auth/${mode === 'login' ? 'login' : 'signup'}`, { method: 'POST', body: JSON.stringify(form) })
       localStorage.setItem('nwt_token', data.token)
       onAuth(data.user)
       toast.success(mode === 'login' ? 'Welcome back' : 'Account created')
-    } catch (err) {
-      toast.error(err.message)
-    } finally { setLoading(false) }
+    } catch (err) { toast.error(err.message) } finally { setLoading(false) }
+  }
+
+  const submitForgot = async (e) => {
+    e.preventDefault()
+    setLoading(true)
+    try {
+      const data = await api('/auth/forgot', { method: 'POST', body: JSON.stringify({ email: form.email }) })
+      if (data.devToken) {
+        setForm(f => ({ ...f, token: data.devToken }))
+        setMode('reset')
+        toast.success('Reset token generated. Set a new password.')
+      } else {
+        toast.success('If that email exists, a reset link has been sent.')
+        setMode('login')
+      }
+    } catch (err) { toast.error(err.message) } finally { setLoading(false) }
+  }
+
+  const submitReset = async (e) => {
+    e.preventDefault()
+    setLoading(true)
+    try {
+      await api('/auth/reset', { method: 'POST', body: JSON.stringify({ email: form.email, token: form.token, password: form.password }) })
+      toast.success('Password updated. Please sign in.')
+      setForm(f => ({ ...f, password: '', token: '' }))
+      setMode('login')
+    } catch (err) { toast.error(err.message) } finally { setLoading(false) }
+  }
+
+  const titles = {
+    login: ['Sign in to your account', 'Track your global net worth in one place.'],
+    signup: ['Create your account', 'Start tracking your wealth today.'],
+    forgot: ['Reset your password', 'Enter your email to receive a reset link.'],
+    reset: ['Set a new password', 'Choose a strong password for your account.'],
   }
 
   return (
     <div className="min-h-screen mesh-bg flex items-center justify-center p-4">
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className="w-full max-w-md">
         <div className="flex items-center justify-center gap-2 mb-6">
-          <div className="h-10 w-10 rounded-xl bg-primary flex items-center justify-center shadow-lg shadow-primary/30">
-            <Sparkles className="h-5 w-5 text-primary-foreground" />
-          </div>
+          <div className="h-10 w-10 rounded-xl bg-primary flex items-center justify-center shadow-lg shadow-primary/30"><Sparkles className="h-5 w-5 text-primary-foreground" /></div>
           <span className="text-2xl font-extrabold tracking-tight">Aureal</span>
         </div>
         <Card className="glass border-border/60 shadow-2xl">
           <CardHeader>
-            <CardTitle className="text-xl">{mode === 'login' ? 'Sign in to your account' : 'Create your account'}</CardTitle>
-            <CardDescription>Track your global net worth in one place.</CardDescription>
+            <CardTitle className="text-xl">{titles[mode][0]}</CardTitle>
+            <CardDescription>{titles[mode][1]}</CardDescription>
           </CardHeader>
           <CardContent>
-            <form onSubmit={submit} className="space-y-4">
-              {mode === 'signup' && (
+            {(mode === 'login' || mode === 'signup') && (
+              <form onSubmit={submitAuth} className="space-y-4">
+                {mode === 'signup' && (
+                  <div className="space-y-1.5"><Label>Full name</Label><Input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Jane Doe" /></div>
+                )}
+                <div className="space-y-1.5"><Label>Email</Label><Input type="email" required value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="you@example.com" /></div>
                 <div className="space-y-1.5">
-                  <Label>Full name</Label>
-                  <Input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Jane Doe" />
+                  <div className="flex items-center justify-between">
+                    <Label>Password</Label>
+                    {mode === 'login' && <button type="button" className="text-xs text-primary hover:underline" onClick={() => setMode('forgot')}>Forgot password?</button>}
+                  </div>
+                  <Input type="password" required value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder="********" />
                 </div>
-              )}
-              <div className="space-y-1.5">
-                <Label>Email</Label>
-                <Input type="email" required value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="you@example.com" />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Password</Label>
-                <Input type="password" required value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder="••••••••" />
-              </div>
-              {mode === 'signup' && (
-                <div className="space-y-1.5">
-                  <Label>Preferred currency</Label>
-                  <Select value={form.currency} onValueChange={v => setForm({ ...form, currency: v })}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>{CURRENCIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-                  </Select>
-                </div>
-              )}
-              <Button type="submit" className="w-full" disabled={loading}>
-                {loading ? 'Please wait…' : mode === 'login' ? 'Sign in' : 'Create account'}
-              </Button>
-              <Button type="button" variant="outline" className="w-full" disabled title="Configure Google OAuth keys to enable">
-                Continue with Google
-              </Button>
-            </form>
-            <p className="text-sm text-muted-foreground text-center mt-4">
-              {mode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
-              <button className="text-primary font-medium hover:underline" onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}>
-                {mode === 'login' ? 'Sign up' : 'Sign in'}
-              </button>
-            </p>
+                {mode === 'signup' && (
+                  <div className="space-y-1.5"><Label>Preferred currency</Label>
+                    <Select value={form.currency} onValueChange={v => setForm({ ...form, currency: v })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>{CURRENCIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+                )}
+                <Button type="submit" className="w-full" disabled={loading}>{loading ? 'Please wait…' : mode === 'login' ? 'Sign in' : 'Create account'}</Button>
+                <div className="relative py-1"><Separator /><span className="absolute left-1/2 -translate-x-1/2 -top-0.5 bg-card px-2 text-xs text-muted-foreground">or</span></div>
+                <GoogleButton onAuth={onAuth} />
+              </form>
+            )}
+
+            {mode === 'forgot' && (
+              <form onSubmit={submitForgot} className="space-y-4">
+                <div className="space-y-1.5"><Label>Email</Label><Input type="email" required value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="you@example.com" /></div>
+                <Button type="submit" className="w-full" disabled={loading}><Mail className="h-4 w-4 mr-2" />{loading ? 'Sending…' : 'Send reset link'}</Button>
+                <Button type="button" variant="ghost" className="w-full" onClick={() => setMode('login')}><ArrowLeft className="h-4 w-4 mr-2" />Back to sign in</Button>
+              </form>
+            )}
+
+            {mode === 'reset' && (
+              <form onSubmit={submitReset} className="space-y-4">
+                <div className="space-y-1.5"><Label>Email</Label><Input type="email" required value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></div>
+                <div className="space-y-1.5"><Label>Reset token</Label><Input required value={form.token} onChange={e => setForm({ ...form, token: e.target.value })} placeholder="Paste your reset token" /></div>
+                <div className="space-y-1.5"><Label>New password</Label><Input type="password" required value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder="********" /></div>
+                <Button type="submit" className="w-full" disabled={loading}><KeyRound className="h-4 w-4 mr-2" />{loading ? 'Updating…' : 'Update password'}</Button>
+                <Button type="button" variant="ghost" className="w-full" onClick={() => setMode('login')}><ArrowLeft className="h-4 w-4 mr-2" />Back to sign in</Button>
+              </form>
+            )}
+
+            {(mode === 'login' || mode === 'signup') && (
+              <p className="text-sm text-muted-foreground text-center mt-4">
+                {mode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
+                <button className="text-primary font-medium hover:underline" onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}>{mode === 'login' ? 'Sign up' : 'Sign in'}</button>
+              </p>
+            )}
           </CardContent>
         </Card>
       </motion.div>
@@ -504,18 +584,208 @@ function GoalsPage({ currency }) {
   )
 }
 
-// ================= INTEGRATIONS (stubs) =================
-function IntegrationsPage() {
+// ================= CRYPTO (live prices) =================
+function CryptoPage({ currency }) {
+  const [data, setData] = useState(null)
+  const [coins, setCoins] = useState([])
+  const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState(null)
+  const [form, setForm] = useState({ coinId: 'bitcoin', quantity: '', averageCostUsd: '' })
+  const [refreshing, setRefreshing] = useState(false)
+
+  const load = useCallback(() => {
+    api('/crypto').then(setData).catch(e => toast.error(e.message))
+  }, [])
+  useEffect(() => {
+    load()
+    api('/crypto/coins').then(setCoins).catch(() => {})
+  }, [load])
+
+  const refresh = async () => { setRefreshing(true); await load(); setRefreshing(false) }
+  const openNew = () => { setEditing(null); setForm({ coinId: 'bitcoin', quantity: '', averageCostUsd: '' }); setOpen(true) }
+  const openEdit = (h) => { setEditing(h); setForm({ coinId: h.coinId, quantity: h.quantity, averageCostUsd: h.averageCostUsd }); setOpen(true) }
+  const save = async () => {
+    try {
+      if (editing) await api(`/crypto/${editing.id}`, { method: 'PUT', body: JSON.stringify({ quantity: Number(form.quantity), averageCostUsd: Number(form.averageCostUsd) }) })
+      else await api('/crypto', { method: 'POST', body: JSON.stringify({ coinId: form.coinId, quantity: Number(form.quantity), averageCostUsd: Number(form.averageCostUsd) }) })
+      toast.success('Saved'); setOpen(false); load()
+    } catch (e) { toast.error(e.message) }
+  }
+  const remove = async (h) => { try { await api(`/crypto/${h.id}`, { method: 'DELETE' }); load() } catch (e) { toast.error(e.message) } }
+
+  const usd = (n) => n == null ? '—' : new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(n)
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold">Crypto Portfolio</h2>
+          <p className="text-sm text-muted-foreground">Live prices via CoinGecko · values in USD</p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="icon" onClick={refresh} disabled={refreshing}><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /></Button>
+          <Button onClick={openNew}><Plus className="h-4 w-4 mr-1" />Add Holding</Button>
+        </div>
+      </div>
+
+      {data && (
+        <div className="grid gap-4 sm:grid-cols-3">
+          {[
+            { l: 'Portfolio Value', v: usd(data.totalValue), sub: 'current market value' },
+            { l: 'Total Gain / Loss', v: usd(data.totalGainLoss), pos: data.totalGainLoss >= 0 },
+            { l: "Today's Change", v: usd(data.totalDailyGainLoss), pos: data.totalDailyGainLoss >= 0 },
+          ].map((c, i) => (
+            <motion.div key={c.l} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.06 }}>
+              <Card className="card-3d"><CardContent className="p-5">
+                <div className="text-sm text-muted-foreground">{c.l}</div>
+                <div className={`text-2xl font-bold mt-1 ${c.pos === undefined ? '' : c.pos ? 'text-emerald-500' : 'text-rose-500'}`}>{c.v}</div>
+                {c.sub && <div className="text-xs text-muted-foreground mt-1">{c.sub}</div>}
+              </CardContent></Card>
+            </motion.div>
+          ))}
+        </div>
+      )}
+
+      <Card className="card-3d">
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader><TableRow>
+              <TableHead>Asset</TableHead><TableHead className="text-right">Quantity</TableHead>
+              <TableHead className="text-right">Price</TableHead><TableHead className="text-right">24h</TableHead>
+              <TableHead className="text-right">Value</TableHead><TableHead className="w-[90px]"></TableHead>
+            </TableRow></TableHeader>
+            <TableBody>
+              {(!data || data.rows.length === 0) && <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-10">No holdings yet. Add your first coin.</TableCell></TableRow>}
+              {data?.rows.map(r => (
+                <TableRow key={r.id}>
+                  <TableCell><span className="font-medium">{r.name}</span> <Badge variant="secondary">{r.symbol}</Badge></TableCell>
+                  <TableCell className="text-right">{r.quantity}</TableCell>
+                  <TableCell className="text-right">{usd(r.currentPrice)}</TableCell>
+                  <TableCell className={`text-right ${r.changePct == null ? '' : r.changePct >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{r.changePct == null ? '—' : `${r.changePct.toFixed(2)}%`}</TableCell>
+                  <TableCell className="text-right font-semibold">{usd(r.value)}</TableCell>
+                  <TableCell><div className="flex gap-1 justify-end">
+                    <Button size="icon" variant="ghost" onClick={() => openEdit(r)}><Pencil className="h-4 w-4" /></Button>
+                    <Button size="icon" variant="ghost" onClick={() => remove(r)}><Trash2 className="h-4 w-4 text-rose-500" /></Button>
+                  </div></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>{editing ? 'Edit Holding' : 'Add Holding'}</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5"><Label>Coin</Label>
+              <Select value={form.coinId} onValueChange={v => setForm({ ...form, coinId: v })} disabled={!!editing}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>{coins.map(c => <SelectItem key={c.id} value={c.id}>{c.name} ({c.symbol})</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5"><Label>Quantity</Label><Input type="number" step="any" value={form.quantity} onChange={e => setForm({ ...form, quantity: e.target.value })} placeholder="0.5" /></div>
+            <div className="space-y-1.5"><Label>Average buy price (USD)</Label><Input type="number" step="any" value={form.averageCostUsd} onChange={e => setForm({ ...form, averageCostUsd: e.target.value })} placeholder="40000" /></div>
+          </div>
+          <DialogFooter><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save}>Save</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
+// ================= PLAID CONNECT =================
+function PlaidConnect({ currency, onSynced }) {
+  const [linkToken, setLinkToken] = useState(null)
+  const [status, setStatus] = useState('loading') // loading | ready | unconfigured | error
+  const [accounts, setAccounts] = useState([])
+  const [busy, setBusy] = useState(false)
+
+  const fetchToken = useCallback(async () => {
+    try {
+      const res = await fetch('/api/plaid/link-token', { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` } })
+      if (res.status === 503) { setStatus('unconfigured'); return }
+      if (!res.ok) { setStatus('error'); return }
+      const d = await res.json(); setLinkToken(d.link_token); setStatus('ready')
+    } catch { setStatus('error') }
+  }, [])
+  useEffect(() => { fetchToken() }, [fetchToken])
+
+  const loadBalances = useCallback(async () => {
+    try {
+      const res = await fetch('/api/plaid/balances', { headers: { Authorization: `Bearer ${getToken()}` } })
+      if (res.ok) { const d = await res.json(); setAccounts((d.items || []).flatMap(i => i.accounts || [])) }
+    } catch {}
+  }, [])
+  useEffect(() => { if (status === 'ready') loadBalances() }, [status, loadBalances])
+
+  const onSuccess = useCallback(async (public_token) => {
+    setBusy(true)
+    try {
+      await api('/plaid/exchange', { method: 'POST', body: JSON.stringify({ public_token }) })
+      toast.success('Bank connected')
+      await loadBalances()
+    } catch (e) { toast.error(e.message) } finally { setBusy(false) }
+  }, [loadBalances])
+
+  const { open, ready } = usePlaidLink({ token: linkToken, onSuccess })
+
+  const sync = async () => {
+    setBusy(true)
+    try { const d = await api('/plaid/sync', { method: 'POST' }); toast.success(`Synced ${d.imported} account(s) into Assets`); onSynced?.() }
+    catch (e) { toast.error(e.message) } finally { setBusy(false) }
+  }
+
+  return (
+    <Card className="card-3d">
+      <CardContent className="p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center"><Landmark className="h-5 w-5 text-primary" /></div>
+            <div>
+              <div className="font-semibold">Plaid — Bank Connections</div>
+              <div className="text-xs text-muted-foreground">Securely link bank accounts and sync balances.</div>
+            </div>
+          </div>
+          {status === 'unconfigured' && <Badge variant="secondary">Add keys to enable</Badge>}
+        </div>
+        {status === 'unconfigured' && <p className="text-sm text-muted-foreground">Set <code className="text-xs">PLAID_CLIENT_ID</code>, <code className="text-xs">PLAID_SECRET</code> and <code className="text-xs">PLAID_ENV</code> to activate. The integration is production-ready and will light up automatically.</p>}
+        {status === 'ready' && (
+          <div className="flex gap-2">
+            <Button onClick={() => open()} disabled={!ready || busy}><Link2 className="h-4 w-4 mr-2" />Connect bank</Button>
+            {accounts.length > 0 && <Button variant="outline" onClick={sync} disabled={busy}><RefreshCw className="h-4 w-4 mr-2" />Sync to Assets</Button>}
+          </div>
+        )}
+        {accounts.length > 0 && (
+          <div className="rounded-lg border border-border/60 divide-y divide-border/60">
+            {accounts.map((a, i) => (
+              <div key={i} className="flex items-center justify-between px-3 py-2 text-sm">
+                <span>{a.name} <span className="text-muted-foreground">••{a.mask}</span></span>
+                <span className="font-semibold">{fmt(a.balances?.current ?? a.balances?.available ?? 0, a.balances?.iso_currency_code || 'USD')}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// ================= INTEGRATIONS =================
+function IntegrationsPage({ currency }) {
   const groups = [
-    { title: 'Banking', icon: Landmark, providers: ['Plaid', 'Open Banking'] },
     { title: 'Investments', icon: TrendingDown, providers: ['Wealthsimple', 'Questrade', 'Fidelity', 'Charles Schwab', 'Interactive Brokers'] },
-    { title: 'Crypto', icon: Coins, providers: ['WalletConnect', 'Coinbase', 'Binance'] },
+    { title: 'Crypto Exchanges', icon: Coins, providers: ['WalletConnect', 'Coinbase', 'Binance'] },
   ]
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-bold">Integrations</h2>
-        <p className="text-sm text-muted-foreground">Connect accounts to sync balances automatically. Ready to enable once API keys are added.</p>
+        <p className="text-sm text-muted-foreground">Connect accounts to sync balances automatically.</p>
+      </div>
+      <div className="space-y-3">
+        <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground"><Landmark className="h-4 w-4" /> Banking</div>
+        <PlaidConnect currency={currency} />
       </div>
       {groups.map(g => (
         <div key={g.title} className="space-y-3">
@@ -655,6 +925,7 @@ const NAV = [
   { key: 'assets', label: 'Assets', icon: Wallet },
   { key: 'liabilities', label: 'Liabilities', icon: TrendingDown },
   { key: 'goals', label: 'Goals', icon: Target },
+  { key: 'crypto', label: 'Crypto', icon: Bitcoin },
   { key: 'integrations', label: 'Integrations', icon: Plug },
   { key: 'profile', label: 'Profile', icon: User },
 ]
@@ -736,7 +1007,8 @@ function AppShell({ user, setUser, onLogout }) {
             {view === 'assets' && <EntityManager kind="assets" currency={currency} />}
             {view === 'liabilities' && <EntityManager kind="liabilities" currency={currency} />}
             {view === 'goals' && <GoalsPage currency={currency} />}
-            {view === 'integrations' && <IntegrationsPage />}
+            {view === 'crypto' && <CryptoPage currency={currency} />}
+            {view === 'integrations' && <IntegrationsPage currency={currency} />}
             {view === 'profile' && <ProfilePage user={user} setUser={setUser} />}
             {view === 'admin' && user.role === 'admin' && <AdminPage currency={currency} />}
           </main>

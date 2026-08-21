@@ -218,10 +218,67 @@ backend:
         -agent: "testing"
         -comment: "✅ Admin endpoints fully working. Regular user receives 403 Forbidden for /admin/metrics, /admin/users, /admin/audit. Admin login successful with admin@networth.app. Admin token grants access: /admin/metrics returns totalUsers, totalAssets, totalLiabilities, totalGoals, aum, debt, aggregateNetWorth. /admin/users returns array with netWorth per user. /admin/audit returns array of audit logs with email. Role-gating working correctly."
 
-frontend:
-  - task: "Full net worth tracker SPA UI"
+  - task: "Google Sign-In (GIS token verify -> app JWT, account linking)"
     implemented: true
-    working: "NA"
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "POST /api/auth/google verifies Google ID token via google-auth-library, links by googleSub then verified email, issues app JWT. Returns 503 when NEXT_PUBLIC_GOOGLE_CLIENT_ID unset (current state)."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ Google Sign-In tested. POST /api/auth/google with credential returns 503 'Google sign-in is not configured' as expected (NEXT_PUBLIC_GOOGLE_CLIENT_ID is empty). Endpoint correctly handles unconfigured state."
+  - task: "Forgot/Reset password flow (secure token)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "POST /api/auth/forgot always returns ok; stores bcrypt-hashed token + 1h expiry; returns devToken (no email provider wired). POST /api/auth/reset validates token+expiry, updates password hash, clears token."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ Forgot/Reset password flow fully tested. Created fresh user test_91jxjk2w@test.com. POST /api/auth/forgot returns {ok:true, devToken}. Nonexistent email also returns ok:true (no account leak). POST /api/auth/reset with devToken successfully changes password. Old password returns 401, new password works. Wrong token returns 400. All 7 test cases passed."
+  - task: "Crypto live prices (CoinGecko) + holdings CRUD"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "GET/POST /api/crypto, PUT/DELETE /api/crypto/{id}, GET /api/crypto/coins. Server-side 60s CoinGecko cache. Verified live values via curl. Keyless (COINGECKO_API_KEY optional)."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ Crypto endpoints fully tested. GET /api/crypto/coins returns 15 coins with id/symbol/name. POST creates bitcoin (0.5 BTC @ $40k) and ethereum (2 ETH @ $2k) holdings. Invalid coin returns 400. GET /api/crypto returns live prices with correct math: currentPrice is positive, value≈quantity*currentPrice, gainLoss≈value-quantity*avgCost, dailyGainLoss≈value*changePct/100, totalValue≈sum(values). PUT updates quantity. DELETE removes holding. All 10 test cases passed."
+  - task: "Plaid integration layer (link-token/exchange/balances/sync) - dormant until keys"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "POST /api/plaid/link-token, /api/plaid/exchange, GET /api/plaid/balances, POST /api/plaid/sync. All return 503 until PLAID_CLIENT_ID/SECRET/ENV set. GET /api/config returns {googleEnabled, plaidEnabled}."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ Plaid endpoints tested. All 4 endpoints (POST /api/plaid/link-token, POST /api/plaid/exchange, GET /api/plaid/balances, POST /api/plaid/sync) correctly return 503 'Plaid is not configured' when PLAID_CLIENT_ID/SECRET are unset. GET /api/config returns {googleEnabled:false, plaidEnabled:false}. Auth guard verified: endpoints without token return 401. All 6 test cases passed."
+
+frontend:
+  - task: "Full net worth tracker SPA UI (auth, dashboard, assets, liabilities, goals, crypto, integrations, profile, admin, dark/light)"
+    implemented: true
+    working: true
     file: "app/page.js"
     stuck_count: 0
     priority: "high"
@@ -229,12 +286,15 @@ frontend:
     status_history:
         -working: "NA"
         -agent: "main"
-        -comment: "Auth screen, dashboard, CRUD pages, goals, integrations stubs, profile, admin, light/dark theme. Not yet tested by agent."
+        -comment: "Added Google button (GIS), forgot/reset views, Crypto page (live prices + holdings CRUD), functional Plaid connect. Please run full UI + responsive + dark/light testing and auto-fix issues."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ COMPREHENSIVE UI TEST PASSED. Created test user test_w9aklt2c@networth.test. ALL FLOWS WORKING: (1) Auth: Signup with EUR currency ✓, Logout ✓, Login ✓, Forgot password flow (devToken auto-filled) ✓, Reset password ✓, Login with new password ✓. Google button correctly disabled. (2) Dashboard: All 4 summary cards (Net Worth, Assets, Liabilities, Monthly Growth) ✓, Net Worth History chart ✓, Goal Progress panel ✓, Asset Allocation donut ✓, Liability Breakdown bar ✓. (3) Assets CRUD: Created with default category ✓, created with custom category 'Startups' ✓, edited value to 12000 ✓, deleted ✓. (4) Liabilities CRUD: Created Mortgage ✓, edited to 6000 ✓, deleted ✓. (5) Goals CRUD: Created Retirement Fund €500k ✓, progress card with percentage ✓, edited to €600k ✓, deleted ✓. (6) Crypto: Navigated ✓, added Bitcoin holding 0.25 BTC @ $40k ✓, all 3 summary cards (Portfolio Value, Total Gain/Loss, Today's Change) with LIVE data ✓, table shows live price and 24h % ✓, refresh button works ✓, edited quantity to 0.5 ✓, deleted ✓. (7) Integrations: Plaid card shows dormant state with 'Add keys to enable' badge and explanatory text ✓, Investments and Crypto Exchange provider cards rendered ✓, 8 disabled Connect buttons ✓. (8) Profile: Changed currency to INR ✓, saved ✓, verified INR symbol (₹) on Dashboard ✓, toggled Dark theme ✓, toggled Light theme ✓. (9) Admin: Logged in as admin@networth.app ✓, Admin nav item visible (only for admin) ✓, all metrics cards (Users, Assets tracked, Liabilities tracked, Aggregate Net Worth) ✓, Users table ✓, Audit Logs table ✓. (10) Theme toggle: Top-bar dark/light toggle working ✓. (11) Responsive: Mobile (390x844) hamburger menu visible and opens ✓, tablet (768x1024) renders correctly ✓, no horizontal overflow ✓. No critical console errors or network failures. All 12 test flows completed successfully."
 
 metadata:
   created_by: "main_agent"
-  version: "1.0"
-  test_sequence: 1
+  version: "2.0"
+  test_sequence: 4
   run_ui: false
 
 test_plan:
@@ -245,6 +305,10 @@ test_plan:
 
 agent_communication:
     -agent: "main"
-    -message: "Backend MVP complete for net worth tracker on Next.js+MongoDB. Please test all endpoints. Auth is JWT via Authorization: Bearer header. Signup creates user (first user/ADMIN_EMAIL=admin@networth.app gets admin role). Test: signup 2 users (one admin, one regular), login, me, profile currency update, assets/liabilities/goals CRUD, dashboard aggregation correctness (netWorth = assets - liabilities), CSV export returns csv, and admin routes return 403 for non-admin. Note: an admin user admin@networth.app / test1234 may already exist from a smoke test."
+    -message: "Phase 2 endpoints added. TEST BACKEND FIRST: (1) /api/auth/google -> 503 (client id unset); (2) create a FRESH test user, /api/auth/forgot returns {ok:true, devToken}, then /api/auth/reset with devToken+email+new password succeeds, old password fails login, new password works; (3) crypto CRUD + GET /api/crypto live prices + math (value=qty*price, dailyGainLoss=value*changePct/100, gainLoss=value-qty*avgCost); (4) plaid endpoints -> 503 until keys; (5) /api/config booleans. IMPORTANT: use a fresh user for reset flow; do NOT change admin@networth.app / test1234."
     -agent: "testing"
-    -message: "✅ BACKEND TESTING COMPLETE - ALL 29 TESTS PASSED. Comprehensive testing performed on all backend endpoints: Auth (6 tests), Profile (1 test), Assets CRUD (5 tests), Liabilities CRUD (4 tests), Goals CRUD (4 tests), Dashboard (1 test), CSV Export (1 test), Admin (7 tests). All endpoints working correctly with proper authentication, authorization, CRUD operations, data validation, and calculations. No critical issues found. Backend is production-ready."
+    -message: "(previous run) BACKEND PHASE 1 - ALL 29 TESTS PASSED."
+    -agent: "testing"
+    -message: "BACKEND PHASE 2 - ALL 23 TESTS PASSED. Tested: (1) GET /api/config returns {googleEnabled:false, plaidEnabled:false}. (2) POST /api/auth/google returns 503 (unconfigured). (3) Forgot/Reset password flow: created fresh user, forgot returns devToken, reset works, old password fails, new password works, wrong token returns 400, no account leak. (4) Crypto: GET /api/crypto/coins returns 15 coins, POST creates holdings, invalid coin returns 400, GET verifies live price math (value, gainLoss, dailyGainLoss all correct), PUT updates, DELETE removes. (5) Plaid: all 4 endpoints return 503 (unconfigured). (6) Auth guard: endpoints without token return 401. All Phase 2 backend tasks working correctly."
+    -agent: "testing"
+    -message: "FRONTEND FULL UI TEST - ALL 12 FLOWS PASSED ✅. Test user: test_w9aklt2c@networth.test. (1) Auth: Signup/Logout/Login/Forgot-Reset all working, Google button disabled as expected. (2) Dashboard: 4 cards + 4 charts all present. (3) Assets: CRUD with default & custom categories working. (4) Liabilities: CRUD working. (5) Goals: CRUD with progress card working. (6) Crypto: Live prices, 3 summary cards, holdings CRUD, refresh button all working. (7) Integrations: Plaid dormant state correct, 8 provider cards with disabled buttons. (8) Profile: Currency change to INR verified on Dashboard, theme toggle working. (9) Admin: All metrics, Users table, Audit Logs working. (10) Theme: Top-bar toggle working. (11) Responsive: Mobile hamburger menu works, tablet renders correctly, no overflow. (12) No critical console errors or network failures. ALL TESTS PASSED - APP IS FULLY FUNCTIONAL."
